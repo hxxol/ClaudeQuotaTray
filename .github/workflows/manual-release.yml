@@ -85,6 +85,9 @@ jobs:
           - Interactive Explorer, tooltip, drag and mixed-DPI behavior still needs the manual Windows checklist in TESTING.md.
           - No automatic update or background release workflow. This run was started manually.
           "@ | Set-Content release-assets/RELEASE_NOTES.md -Encoding utf8NoBOM
+      - name: Show runtime log on failure
+        if: failure()
+        run: Get-Content "$env:LOCALAPPDATA/CodexMeter/logs/runtime.log" -ErrorAction SilentlyContinue
       - name: Upload build assets
         uses: actions/upload-artifact@v7
         with:
