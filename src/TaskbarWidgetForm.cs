@@ -136,6 +136,7 @@ namespace CodexQuotaTray
             UpdateImage();
         }
 
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
         internal Func<string> ResetTextProvider { get; set; }
 
         public void SetResetWindow(QuotaWindow window)
