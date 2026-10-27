@@ -141,12 +141,29 @@ namespace CodexQuotaTray
         private void UpdateRecoveryAccess()
         {
             if (_recoveryIcon == null || _exiting) return;
-            bool needed = !_widget.OverlayAvailable;
+            UpdateTrayTooltip();
+            bool needed = true;
             if (_recoveryIcon.Visible != needed)
             {
                 _recoveryIcon.Visible = needed;
                 RuntimeLog.Event(needed ? "taskbar.hidden.recovery-icon-shown" : "taskbar.visible.recovery-icon-hidden");
             }
+        }
+
+        private void UpdateTrayTooltip()
+        {
+            var snapshot = _lastResult == null ? null : _lastResult.Snapshot;
+            var text = FormatTrayReset("5h额度", snapshot == null ? null : snapshot.FiveHourWindow) + "\n" +
+                FormatTrayReset("周额度", snapshot == null ? null : snapshot.WeeklyWindow);
+            if (_recoveryIcon.Text != text) _recoveryIcon.Text = text;
+        }
+
+        private static string FormatTrayReset(string label, QuotaWindow window)
+        {
+            if (window == null || !window.ResetsAt.HasValue) return label + "：暂无数据";
+            var minutes = (long)Math.Ceiling((window.ResetsAt.Value - DateTimeOffset.Now).TotalMinutes);
+            if (minutes < 0) minutes = 0;
+            return label + "：" + (minutes / 1440) + "天" + (minutes / 60 % 24) + "时" + (minutes % 60) + "分后重置";
         }
 
         private void ShowSettings()
