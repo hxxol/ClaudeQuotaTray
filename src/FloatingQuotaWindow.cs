@@ -121,7 +121,8 @@ namespace CodexQuotaTray
             _physicalTop = _settings.FloatingTop ?? work.Bottom - Diameter - 24;
             KeepVisibleOnDesktop();
             ApplyPhysicalGeometry();
-            _tooltip = new LegacyResetTooltip(_handle, GetPhysicalBounds);
+            try { _tooltip = new LegacyResetTooltip(_handle, GetPhysicalBounds); }
+            catch (Exception exception) { _tooltip = null; RuntimeLog.Exception("floating.tooltip-unavailable", exception); }
             RefreshResetTooltip();
         }
 
