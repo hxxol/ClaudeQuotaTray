@@ -417,6 +417,8 @@ namespace CodexQuotaTray
         private static void ReportFailure(string stage, Exception exception)
         {
             Trace.WriteLine("Interaction smoke test [" + stage + "]: " + exception);
+            try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "smoke-fail.txt"), stage + ": " + exception + "
+"); } catch { }
             RuntimeLog.Exception("Interaction smoke test: " + stage, exception);
         }
         private static IntPtr Pack(Point point) => new IntPtr(unchecked((int)((uint)(ushort)point.X | ((uint)(ushort)point.Y << 16))));
