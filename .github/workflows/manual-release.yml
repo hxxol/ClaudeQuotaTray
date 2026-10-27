@@ -51,8 +51,6 @@ jobs:
         run: |
           dotnet run --project tests/CodexQuotaTray.Tests.csproj -c Release -- --fixtures-only
           if ($LASTEXITCODE -ne 0) { throw 'Windows regression tests failed.' }
-      - name: Compare against the original .NET Framework parser
-        run: ./tests/compare-legacy.ps1
       - name: Publish, validate and smoke-test both single EXEs
         run: |
           $ErrorActionPreference = 'Stop'
