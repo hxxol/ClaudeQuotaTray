@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Product>CodexQuotaTray</Product>
+    <Company>SYD-Official</Company>
+    <Description>Windows taskbar and floating Codex quota display</Description>
+    <Copyright>Copyright © 2026 SYD-Official</Copyright>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\CodexQuotaTray.ico</ApplicationIcon>
+    <AssemblyName>CodexQuotaTray</AssemblyName>
+    <RootNamespace>CodexQuotaTray</RootNamespace>
+    <Version>3.0.2-preview</Version>
+    <Platforms>AnyCPU;x64</Platforms>
+    <PublishTrimmed>false</PublishTrimmed>
+    <DebugType>embedded</DebugType>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <ItemGroup><Compile Include="src\**\*.cs" Exclude="src\UpdateService.cs" /></ItemGroup>
+</Project>

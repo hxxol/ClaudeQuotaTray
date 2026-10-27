@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms><EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems><ImplicitUsings>disable</ImplicitUsings><Nullable>disable</Nullable>
+    <StartupObject>ParserTests</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="ParserTests.cs;RegressionTests.cs;CompatibilityContract.cs" />
+    <Compile Include="../src/Models.cs;../src/AppSettings.cs;../src/CodexCompletionMonitor.cs;../src/SessionQuotaReader.cs;../src/LegacyJson*.cs;../src/RingIconFactory.cs;../src/UpdateService.cs;../src/ThemePalette.cs;../src/TaskbarPlacement.cs;../src/QuotaDisplayState.cs" />
+  </ItemGroup>
+</Project>

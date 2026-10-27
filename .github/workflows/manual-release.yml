@@ -1,0 +1,109 @@
+name: Manual Windows build and release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, without v (for example 3.0.0)'
+        required: true
+        default: '3.0.0'
+        type: string
+      publish_release:
+        description: 'Publish a GitHub Release after every test and smoke check passes'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quota-manual-release
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Test and build both Windows x64 single EXEs
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate release version
+        run: |
+          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must be three numbers, such as 3.0.0.' }
+          $parts = $env:RELEASE_VERSION.Split('.') | ForEach-Object { [int]$_ }
+          if (($parts | Where-Object { $_ -gt 65534 }).Count) { throw 'Version components must be at most 65534.' }
+      - name: Build and run all Windows fixture and rendering tests
+        run: |
+          dotnet run --project tests/CodexQuotaTray.Tests.csproj -c Release -- --fixtures-only
+          if ($LASTEXITCODE -ne 0) { throw 'Windows regression tests failed.' }
+      - name: Compare against the original .NET Framework parser
+        run: ./tests/compare-legacy.ps1
+      - name: Publish, validate and smoke-test both single EXEs
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          foreach ($mode in @('self-contained', 'framework-dependent')) {
+            $selfContained = if ($mode -eq 'self-contained') { 'true' } else { 'false' }
+            $out = Join-Path $PWD "dist/win-x64-$mode"
+            dotnet publish CodexQuotaTray.csproj -c Release -r win-x64 --self-contained $selfContained `
+              -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+              "-p:EnableCompressionInSingleFile=$selfContained" -p:PublishTrimmed=false -p:DebugType=embedded `
+              "-p:Version=$env:RELEASE_VERSION" "-p:AssemblyVersion=$env:RELEASE_VERSION.0" `
+              "-p:FileVersion=$env:RELEASE_VERSION.0" -o $out
+            if ($LASTEXITCODE -ne 0) { throw "Publish failed: $mode" }
+            $files = @(Get-ChildItem $out -File)
+            if ($files.Count -ne 1 -or $files[0].Name -ne 'CodexQuotaTray.exe') { throw "Output was not a single EXE: $mode" }
+            $process = Start-Process $files[0].FullName -ArgumentList '--smoke-test' -PassThru
+            if (-not $process.WaitForExit(30000)) { $process.Kill(); throw "Smoke test timed out: $mode" }
+            $process.Refresh()
+            if ($process.ExitCode -ne 0) { throw "Smoke test failed: $mode, exit $($process.ExitCode)" }
+            Copy-Item $files[0].FullName "release-assets/CodexQuotaTray-v$env:RELEASE_VERSION-win-x64-$mode.exe"
+          }
+          Get-ChildItem release-assets/*.exe | Sort-Object Name | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
+          } | Set-Content release-assets/SHA256SUMS.txt -Encoding utf8NoBOM
+          @"
+          Experimental preview · real-desktop validation pending
+          Windows x64 · .NET 10 · commit $env:GITHUB_SHA
+
+          - self-contained: includes the Windows Desktop runtime; no separate .NET install.
+          - framework-dependent: smaller single EXE; requires .NET 10 Windows Desktop Runtime x64.
+          - Both passed automated parser, settings, offline-cache, placement, rendering, and startup smoke tests.
+          - Interactive Explorer, tooltip, drag and mixed-DPI behavior still needs the manual Windows checklist in TESTING.md.
+          - No automatic update or background release workflow. This run was started manually.
+          "@ | Set-Content release-assets/RELEASE_NOTES.md -Encoding utf8NoBOM
+      - name: Upload build assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: CodexQuotaTray-v${{ inputs.version }}-windows-x64
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish release only after successful tests
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists. Choose a new version; existing assets will not be overwritten." }
+          $assets = @(Get-ChildItem release-assets/*.exe | ForEach-Object FullName)
+          $assets += (Resolve-Path release-assets/SHA256SUMS.txt).Path
+          gh release create $tag @assets --target $env:GITHUB_SHA --title "ClaudeQuotaTray $tag · Preview" --prerelease --notes-file release-assets/RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release creation failed.' }
