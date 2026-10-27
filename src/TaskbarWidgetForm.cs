@@ -93,16 +93,14 @@ namespace CodexQuotaTray
             {
                 using (var graphics = CreateGraphics())
                 {
-                    var textSize = TextRenderer.MeasureText(graphics, _tooltip.GetToolTip(this), _tooltipFont,
-                        new Size(int.MaxValue, int.MaxValue), TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+                    var textSize = TooltipText.Measure(graphics, _tooltip.GetToolTip(this), _tooltipFont);
                     e.ToolTipSize = new Size(textSize.Width + (int)(12 * _dpiScale), textSize.Height + (int)(8 * _dpiScale));
                 }
             };
             _tooltip.Draw += delegate(object sender, DrawToolTipEventArgs e)
             {
                 using (var background = new SolidBrush(Color.FromArgb(35, 35, 35))) e.Graphics.FillRectangle(background, e.Bounds);
-                TextRenderer.DrawText(e.Graphics, e.ToolTipText, _tooltipFont, e.Bounds, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+                TooltipText.Draw(e.Graphics, e.ToolTipText, _tooltipFont, e.Bounds, Color.White);
             };
         }
 
@@ -138,6 +136,8 @@ namespace CodexQuotaTray
             UpdateImage();
         }
 
+        internal Func<string> ResetTextProvider { get; set; }
+
         public void SetResetWindow(QuotaWindow window)
         {
             _resetWindow = window;
@@ -146,7 +146,7 @@ namespace CodexQuotaTray
 
         public void RefreshResetTooltip()
         {
-            var text = _resetWindow == null ? string.Empty : _resetWindow.FormatResetCountdown(DateTimeOffset.Now, _settings.IsEnglish);
+            var text = _resetWindow == null ? string.Empty : (ResetTextProvider != null ? ResetTextProvider() : _resetWindow.FormatResetCountdown(DateTimeOffset.Now, _settings.IsEnglish));
             if (_tooltip.GetToolTip(this) == text) return;
             if (text.Length == 0) _tooltip.Hide(this);
             _tooltip.SetToolTip(this, text);

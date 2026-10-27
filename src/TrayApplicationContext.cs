@@ -68,6 +68,8 @@ namespace CodexQuotaTray
             _refreshTimer = new System.Windows.Forms.Timer { Interval = 20000 };
             _refreshTimer.Tick += delegate { RefreshInBackground(); };
             _refreshTimer.Start();
+            _widget.ResetTextProvider = BuildResetText;
+            _floating.ResetTextProvider = BuildResetText;
             _tooltipTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             _tooltipTimer.Tick += delegate { _widget.RefreshResetTooltip(); _floating.RefreshResetTooltip(); UpdateRecoveryAccess(); };
             _tooltipTimer.Start();
@@ -152,10 +154,15 @@ namespace CodexQuotaTray
 
         private void UpdateTrayTooltip()
         {
-            var snapshot = _lastResult == null ? null : _lastResult.Snapshot;
-            var text = FormatTrayReset("5h额度", snapshot == null ? null : snapshot.FiveHourWindow) + "\n" +
-                FormatTrayReset("周额度", snapshot == null ? null : snapshot.WeeklyWindow);
+            var text = BuildResetText();
             if (_recoveryIcon.Text != text) _recoveryIcon.Text = text;
+        }
+
+        private string BuildResetText()
+        {
+            var snapshot = _lastResult == null ? null : _lastResult.Snapshot;
+            return FormatTrayReset("5h额度", snapshot == null ? null : snapshot.FiveHourWindow) + "\n" +
+                FormatTrayReset("周额度", snapshot == null ? null : snapshot.WeeklyWindow);
         }
 
         private static string FormatTrayReset(string label, QuotaWindow window)

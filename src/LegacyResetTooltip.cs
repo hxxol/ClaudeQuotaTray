@@ -79,8 +79,7 @@ namespace CodexQuotaTray
                 var dpi = Math.Max(1f, GetDpiForWindow(_owner) / 96f);
                 Size textSize;
                 using (var graphics = Graphics.FromHwnd(_owner))
-                    textSize = TextRenderer.MeasureText(graphics, _text, _font, new Size(int.MaxValue, int.MaxValue),
-                        TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+                    textSize = TooltipText.Measure(graphics, _text, _font);
                 int width = textSize.Width + (int)(12 * dpi), height = textSize.Height + (int)(8 * dpi);
                 int x = Math.Max(work.Left, Math.Min(anchor.Left + (anchor.Width - width) / 2, work.Right - width));
                 int y = anchor.Top - height - (int)(8 * dpi);
@@ -102,9 +101,7 @@ namespace CodexQuotaTray
                     using (var background = new SolidBrush(Color.FromArgb(35, 35, 35)))
                     {
                         graphics.FillRectangle(background, bounds);
-                        TextRenderer.DrawText(graphics, _text, _font, bounds, Color.White,
-                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-                            TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+                        TooltipText.Draw(graphics, _text, _font, bounds, Color.White);
                     }
                     handled = true;
                     return new IntPtr(4); // CDRF_SKIPDEFAULT

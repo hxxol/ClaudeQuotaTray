@@ -76,6 +76,8 @@ namespace CodexQuotaTray
             RefreshResetTooltip();
         }
 
+        internal Func<string> ResetTextProvider { get; set; }
+
         public void SetResetWindow(QuotaWindow window)
         {
             _resetWindow = window;
@@ -85,7 +87,7 @@ namespace CodexQuotaTray
         public void RefreshResetTooltip()
         {
             _tooltip?.SetText(_active && _resetWindow != null
-                ? _resetWindow.FormatResetCountdown(DateTimeOffset.Now, _settings.IsEnglish)
+                ? (ResetTextProvider != null ? ResetTextProvider() : _resetWindow.FormatResetCountdown(DateTimeOffset.Now, _settings.IsEnglish))
                 : string.Empty);
         }
 
