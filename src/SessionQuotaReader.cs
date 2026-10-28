@@ -58,7 +58,11 @@ namespace CodexQuotaTray
                 result.ActivityTimeline = new List<TokenActivitySample>();
                 if (latest != null) RecordLiveQuotaSnapshot(latest);
                 result.QuotaHistory = GetCombinedQuotaHistory();
-                if (latest == null) result.Error = failure ?? "读取额度时出现未知错误";
+                if (latest == null)
+                {
+                    result.Error = failure ?? "读取额度时出现未知错误";
+                    result.AwaitingTokenRenewal = failure == AwaitingClaudeRenewalMessage;
+                }
             }
             catch (Exception)
             {
@@ -306,6 +310,10 @@ namespace CodexQuotaTray
             "https://console.anthropic.com/v1/oauth/token"
         };
         private static readonly object CredentialsGate = new object();
+        internal const string AwaitingClaudeRenewalMessage = "令牌已过期，运行一次 claude -p \"hi\" 即可续期";
+        // A refresh token the endpoint rate-limited. It is not sent again: the tray waits for
+        // Claude Code to renew the login, which replaces this token in the credentials file.
+        private static string _rateLimitedRefreshToken;
 
         private sealed class ClaudeCredentials
         {
@@ -394,6 +402,7 @@ namespace CodexQuotaTray
                     return latest;
                 var refreshToken = latest != null && !string.IsNullOrWhiteSpace(latest.RefreshToken) ? latest.RefreshToken : current.RefreshToken;
                 if (string.IsNullOrWhiteSpace(refreshToken)) { failure = "Claude 登录已过期，请在 Claude Code 中重新登录"; return null; }
+                if (refreshToken == _rateLimitedRefreshToken) { failure = AwaitingClaudeRenewalMessage; return null; }
 
                 var status = 0;
                 string body = null;
@@ -426,7 +435,12 @@ namespace CodexQuotaTray
                 }
 
                 if (status == 0) { failure = "无法连接 Claude 登录服务，稍后会自动重试"; return null; }
-                if (status == 429) { failure = "刷新 Claude 登录被限流，稍后会自动重试"; return null; }
+                if (status == 429)
+                {
+                    _rateLimitedRefreshToken = refreshToken;
+                    failure = AwaitingClaudeRenewalMessage;
+                    return null;
+                }
                 if (status == 400 || status == 401 || status == 403) { failure = "Claude 登录已失效，请在 Claude Code 中重新登录"; return null; }
                 if (status < 200 || status >= 300) { failure = "刷新 Claude 登录失败 (" + status + ")"; return null; }
 

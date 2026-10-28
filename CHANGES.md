@@ -1,6 +1,6 @@
 # 修改说明（相对原版 CodexQuotaTray 3.0.2-preview）
 
-本仓库由 [hxxol/CodexQuotaTray](https://github.com/hxxol/CodexQuotaTray) 改成 Claude 版。界面和逻辑尽量保持原样，只改了下面这些地方。当前最新版本：v1.0.4。
+本仓库由 [hxxol/CodexQuotaTray](https://github.com/hxxol/CodexQuotaTray) 改成 Claude 版。界面和逻辑尽量保持原样，只改了下面这些地方。当前最新版本：v1.0.5。
 
 ## 1. 额度来源：Codex 改为 Claude
 
@@ -21,7 +21,7 @@
 
 文件：`src/SessionQuotaReader.cs`、`src/TrayApplicationContext.cs`、`src/AppSettings.cs`、`src/RuntimeLog.cs`、`src/Models.cs`
 
-- 问题：v1.0.3 只读取 `accessToken`，不刷新。令牌约一小时过期，Claude Code 没在运行时不会续期，接口返回 401 后程序继续显示缓存的旧额度，看起来像额度没有变化。
+- 问题：v1.0.3 只读取 `accessToken`，不刷新。令牌约 8 小时过期，Claude Code 没在运行时不会续期，接口返回 401 后程序继续显示缓存的旧额度，看起来像额度没有变化。
 - 令牌自动刷新：
   - 令牌到期前 1 分钟内，或接口返回 401/403 时，用凭据文件里的 `refreshToken` 请求 `POST https://platform.claude.com/v1/oauth/token`（连不上或 404 时改用 `https://console.anthropic.com/v1/oauth/token`），参数与 Claude Code 相同。
   - 刷新成功后，把新的 `accessToken`、`refreshToken`、`expiresAt` 写回 `.credentials.json`，其他字段保持不变。旧的 `refreshToken` 刷新后会失效，必须写回，否则 Claude Code 会掉登录。
@@ -31,6 +31,11 @@
   - 读取失败时，悬停提示的前两行显示“额度未更新，显示的是 MM-dd HH:mm 的数据”和失败原因，下面仍是两行重置时间。原来失败时不显示任何提示。
   - 日志记录 `quota.read-failed`（带原因，只在原因变化时记录一次）、`quota.read-recovered`、`quota.token-refreshed`。日志不包含令牌。
 - 刷新频率：额度接口从每 20 秒请求一次改为每 60 秒。连续失败时间隔逐次翻倍，最长 10 分钟；成功后恢复为 60 秒。悬停提示里的倒计时仍每秒更新。
+- 刷新被限流时等待官方续期（v1.0.5）：
+  - 令牌接口对本程序的刷新请求可能返回 429（限流）。v1.0.4 会在每次重试时再次请求，越重试越容易被限流。
+  - 现在某个 `refreshToken` 被限流后，程序不再用它请求刷新，只在每次轮询时重新读凭据文件，等 Claude Code 续期。Claude Code 续期后会换上新的 `refreshToken`，程序读到后自动恢复。
+  - 等待期间悬停提示显示“令牌已过期，运行一次 claude -p "hi" 即可续期”。运行任意一次 `claude` 命令即可续期，程序在 1 分钟内读到新令牌。
+  - 等待期间只读本地文件、不发网络请求，所以轮询间隔保持 60 秒，不翻倍。
 - 设置和日志目录：`settings.ini` 和 `logs\runtime.log` 从 `%LOCALAPPDATA%\CodexMeter` 改为 `%LOCALAPPDATA%\ClaudeMeter`，不再与原版 CodexQuotaTray 共用（原来两个程序会互相覆盖缓存的剩余额度）。首次启动时会复制原来的设置，但不复制缓存的剩余额度。
 
 ## 2. 悬停提示改为两行

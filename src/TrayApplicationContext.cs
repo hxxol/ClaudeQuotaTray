@@ -256,7 +256,11 @@ namespace CodexQuotaTray
             var error = string.IsNullOrWhiteSpace(result.Error) ? "读取额度时出现未知错误" : result.Error;
             if (error != _lastError) RuntimeLog.Event("quota.read-failed", "reason=" + error);
             _lastError = error;
-            _refreshTimer.Interval = Math.Min(_refreshTimer.Interval * 2, MaximumRefreshIntervalMilliseconds);
+            // Waiting for Claude Code only re-reads the local credentials file, so keep the normal
+            // pace and pick up its renewed token within a minute.
+            _refreshTimer.Interval = result.AwaitingTokenRenewal
+                ? RefreshIntervalMilliseconds
+                : Math.Min(_refreshTimer.Interval * 2, MaximumRefreshIntervalMilliseconds);
         }
 
         private void ApplyVisualResult(QuotaReadResult result)
