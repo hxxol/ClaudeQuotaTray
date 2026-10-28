@@ -4,7 +4,9 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
+using System.Text.Json.Nodes;
 using CodexQuotaTray.Compatibility;
 
 namespace CodexQuotaTray
@@ -48,7 +50,9 @@ namespace CodexQuotaTray
             {
                 // Claude: read the OAuth usage endpoint with the Claude Code credentials.
                 string failure;
-                var latest = ReadLatestFromClaudeApi(out failure);
+                bool refreshed;
+                var latest = ReadLatestFromClaudeApi(out failure, out refreshed);
+                result.TokenRefreshed = refreshed;
                 result.Snapshot = latest;
                 result.Activity = new List<TokenActivitySample>();
                 result.ActivityTimeline = new List<TokenActivitySample>();
@@ -294,51 +298,79 @@ namespace CodexQuotaTray
         private static readonly System.Net.Http.HttpClient HttpClient =
             new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
 
-        private QuotaSnapshot ReadLatestFromClaudeApi(out string failure)
+        private const string ClaudeUserAgent = "claude-code/2.1.0";
+        private const string ClaudeOAuthClientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+        private static readonly string[] ClaudeTokenEndpoints =
+        {
+            "https://platform.claude.com/v1/oauth/token",
+            "https://console.anthropic.com/v1/oauth/token"
+        };
+        private static readonly object CredentialsGate = new object();
+
+        private sealed class ClaudeCredentials
+        {
+            public string AccessToken;
+            public string RefreshToken;
+            public string Plan;
+            public DateTimeOffset? ExpiresAt;
+        }
+
+        private QuotaSnapshot ReadLatestFromClaudeApi(out string failure, out bool refreshed)
         {
             failure = null;
-            string token = null, plan = null;
-            try
-            {
-                var path = ResolveClaudeCredentialsPath();
-                if (!File.Exists(path)) { failure = "尚未找到 Claude 登录凭据，请先运行 Claude Code 并登录"; return null; }
-                string json;
-                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                using (var reader = new StreamReader(stream, Encoding.UTF8, true, 4096, false))
-                {
-                    json = reader.ReadToEnd();
-                }
-                var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-                var oauth = AsDictionary(Get(serializer.DeserializeObject(json) as Dictionary<string, object>, "claudeAiOauth"));
-                token = AsString(Get(oauth, "accessToken"));
-                plan = AsString(Get(oauth, "subscriptionType"));
-            }
-            catch
-            {
-                failure = "无法读取 Claude 登录凭据";
-                return null;
-            }
-            if (string.IsNullOrWhiteSpace(token)) { failure = "Claude 登录凭据中没有访问令牌"; return null; }
+            refreshed = false;
+            var path = ResolveClaudeCredentialsPath();
+            if (!File.Exists(path)) { failure = "尚未找到 Claude 登录凭据，请先运行 Claude Code 并登录"; return null; }
+            var credentials = ReadClaudeCredentials(path);
+            if (credentials == null) { failure = "无法读取 Claude 登录凭据"; return null; }
+            if (string.IsNullOrWhiteSpace(credentials.AccessToken)) { failure = "Claude 登录凭据中没有访问令牌"; return null; }
 
+            // The access token lasts about an hour and Claude Code only renews it while it runs,
+            // so renew it here as well instead of showing stale quota once it expires.
+            if (credentials.ExpiresAt.HasValue && credentials.ExpiresAt.Value <= DateTimeOffset.UtcNow.AddMinutes(1))
+            {
+                credentials = RefreshClaudeCredentials(path, credentials, out failure);
+                if (credentials == null) return null;
+                refreshed = true;
+            }
+
+            int status;
+            var snapshot = RequestClaudeUsage(credentials, out status, out failure);
+            if (snapshot != null || refreshed || (status != 401 && status != 403)) return snapshot;
+
+            // Rejected before the recorded expiry (revoked token or clock skew): renew once and retry.
+            string refreshFailure;
+            var renewed = RefreshClaudeCredentials(path, credentials, out refreshFailure);
+            if (renewed == null) { failure = refreshFailure; return null; }
+            refreshed = true;
+            return RequestClaudeUsage(renewed, out status, out failure);
+        }
+
+        private static QuotaSnapshot RequestClaudeUsage(ClaudeCredentials credentials, out int status, out string failure)
+        {
+            status = 0;
+            failure = null;
             try
             {
-                using (var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, "https://api.anthropic.com/api/oauth/usage"))
+                using (var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/api/oauth/usage"))
                 {
-                    request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token);
+                    request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + credentials.AccessToken);
                     request.Headers.TryAddWithoutValidation("anthropic-beta", "oauth-2025-04-20");
-                    request.Headers.TryAddWithoutValidation("User-Agent", "claude-code/2.1.0");
+                    request.Headers.TryAddWithoutValidation("User-Agent", ClaudeUserAgent);
                     var response = HttpClient.SendAsync(request).GetAwaiter().GetResult();
                     var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    status = (int)response.StatusCode;
                     if (!response.IsSuccessStatusCode)
                     {
-                        var code = (int)response.StatusCode;
-                        failure = code == 401 || code == 403
-                            ? "Claude 登录已过期，请打开一次 Claude Code 以刷新登录"
-                            : "Claude 额度接口返回错误 (" + code + ")";
+                        failure = status == 401 || status == 403
+                            ? "Claude 登录已失效，请在 Claude Code 中重新登录"
+                            : status == 429
+                                ? "Claude 额度接口限流，稍后会自动重试"
+                                : "Claude 额度接口返回错误 (" + status + ")";
                         return null;
                     }
                     QuotaSnapshot snapshot;
-                    if (TryParseClaudeUsageResponse(body, plan, out snapshot)) return snapshot;
+                    if (TryParseClaudeUsageResponse(body, credentials.Plan, out snapshot)) return snapshot;
                     failure = "Claude 返回的额度数据无法识别";
                     return null;
                 }
@@ -348,6 +380,157 @@ namespace CodexQuotaTray
                 failure = "无法连接 Claude 额度接口，稍后会自动重试";
                 return null;
             }
+        }
+
+        private static ClaudeCredentials RefreshClaudeCredentials(string path, ClaudeCredentials current, out string failure)
+        {
+            failure = null;
+            lock (CredentialsGate)
+            {
+                // Claude Code may have renewed the file since it was read; its token then wins.
+                var latest = ReadClaudeCredentials(path);
+                if (latest != null && !string.IsNullOrWhiteSpace(latest.AccessToken) && latest.AccessToken != current.AccessToken &&
+                    (!latest.ExpiresAt.HasValue || latest.ExpiresAt.Value > DateTimeOffset.UtcNow.AddMinutes(1)))
+                    return latest;
+                var refreshToken = latest != null && !string.IsNullOrWhiteSpace(latest.RefreshToken) ? latest.RefreshToken : current.RefreshToken;
+                if (string.IsNullOrWhiteSpace(refreshToken)) { failure = "Claude 登录已过期，请在 Claude Code 中重新登录"; return null; }
+
+                var status = 0;
+                string body = null;
+                foreach (var endpoint in ClaudeTokenEndpoints)
+                {
+                    try
+                    {
+                        using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+                        {
+                            request.Headers.TryAddWithoutValidation("User-Agent", ClaudeUserAgent);
+                            var payload = new JsonObject
+                            {
+                                ["grant_type"] = "refresh_token",
+                                ["refresh_token"] = refreshToken,
+                                ["client_id"] = ClaudeOAuthClientId
+                            };
+                            request.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+                            var response = HttpClient.SendAsync(request).GetAwaiter().GetResult();
+                            status = (int)response.StatusCode;
+                            body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                        }
+                    }
+                    catch
+                    {
+                        status = 0;
+                        body = null;
+                    }
+                    // Only an unreachable or missing endpoint moves on; any other answer is final.
+                    if (status != 0 && status != 404) break;
+                }
+
+                if (status == 0) { failure = "无法连接 Claude 登录服务，稍后会自动重试"; return null; }
+                if (status == 429) { failure = "刷新 Claude 登录被限流，稍后会自动重试"; return null; }
+                if (status == 400 || status == 401 || status == 403) { failure = "Claude 登录已失效，请在 Claude Code 中重新登录"; return null; }
+                if (status < 200 || status >= 300) { failure = "刷新 Claude 登录失败 (" + status + ")"; return null; }
+
+                ClaudeCredentials renewed;
+                try
+                {
+                    var root = JsonNode.Parse(body);
+                    long expiresIn;
+                    renewed = new ClaudeCredentials
+                    {
+                        AccessToken = JsonString(root?["access_token"]),
+                        RefreshToken = JsonString(root?["refresh_token"]) ?? refreshToken,
+                        Plan = latest != null && latest.Plan != null ? latest.Plan : current.Plan,
+                        ExpiresAt = TryJsonLong(root?["expires_in"], out expiresIn) && expiresIn > 0
+                            ? DateTimeOffset.UtcNow.AddSeconds(expiresIn)
+                            : (DateTimeOffset?)null
+                    };
+                }
+                catch
+                {
+                    renewed = null;
+                }
+                if (renewed == null || string.IsNullOrWhiteSpace(renewed.AccessToken))
+                {
+                    failure = "刷新 Claude 登录时返回的数据无法识别";
+                    return null;
+                }
+
+                // The old refresh token is now spent, so Claude Code must get the new pair too.
+                WriteClaudeCredentials(path, renewed);
+                return renewed;
+            }
+        }
+
+        private static ClaudeCredentials ReadClaudeCredentials(string path)
+        {
+            try
+            {
+                var oauth = JsonNode.Parse(ReadSharedText(path))?["claudeAiOauth"];
+                if (oauth == null) return null;
+                long expiresAt;
+                return new ClaudeCredentials
+                {
+                    AccessToken = JsonString(oauth["accessToken"]),
+                    RefreshToken = JsonString(oauth["refreshToken"]),
+                    Plan = JsonString(oauth["subscriptionType"]),
+                    ExpiresAt = TryJsonLong(oauth["expiresAt"], out expiresAt)
+                        ? DateTimeOffset.FromUnixTimeMilliseconds(expiresAt)
+                        : (DateTimeOffset?)null
+                };
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool WriteClaudeCredentials(string path, ClaudeCredentials credentials)
+        {
+            var temporaryPath = path + ".quotatray.tmp";
+            try
+            {
+                var root = JsonNode.Parse(ReadSharedText(path)) as JsonObject;
+                var oauth = root?["claudeAiOauth"] as JsonObject;
+                if (oauth == null) return false;
+                // Edit only the token fields so everything else Claude Code stores is kept.
+                oauth["accessToken"] = credentials.AccessToken;
+                oauth["refreshToken"] = credentials.RefreshToken;
+                if (credentials.ExpiresAt.HasValue) oauth["expiresAt"] = credentials.ExpiresAt.Value.ToUnixTimeMilliseconds();
+                File.WriteAllText(temporaryPath, root.ToJsonString(), new UTF8Encoding(false));
+                File.Move(temporaryPath, path, true);
+                return true;
+            }
+            catch
+            {
+                try { File.Delete(temporaryPath); } catch { }
+                return false;
+            }
+        }
+
+        private static string ReadSharedText(string path)
+        {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(stream, Encoding.UTF8, true, 4096, false))
+            {
+                return reader.ReadToEnd();
+            }
+        }
+
+        private static string JsonString(JsonNode node)
+        {
+            string value;
+            return node is JsonValue json && json.TryGetValue(out value) ? value : null;
+        }
+
+        private static bool TryJsonLong(JsonNode node, out long value)
+        {
+            value = 0;
+            if (!(node is JsonValue json)) return false;
+            if (json.TryGetValue(out value)) return true;
+            double number;
+            if (!json.TryGetValue(out number)) return false;
+            value = (long)number;
+            return true;
         }
 
         internal static bool TryParseClaudeUsageResponse(string json, string planType, out QuotaSnapshot snapshot)

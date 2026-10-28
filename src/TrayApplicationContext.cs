@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
@@ -24,7 +25,11 @@ namespace CodexQuotaTray
         private readonly NotifyIcon _recoveryIcon;
         private Icon _recoveryImage;
         private const int CurrentUiRecoveryVersion = 1;
+        private const int RefreshIntervalMilliseconds = 60000;
+        private const int MaximumRefreshIntervalMilliseconds = 600000;
         private QuotaReadResult _lastResult;
+        private QuotaSnapshot _lastGoodSnapshot;
+        private string _lastError;
         private bool _hasUnread;
         private bool _flash;
         private bool _exiting;
@@ -65,7 +70,7 @@ namespace CodexQuotaTray
             _widget.VisibleChanged += delegate { UpdateRecoveryAccess(); };
             _wake = new WakeWindow(recoverUi => _widget.BeginInvoke(new Action(() => HandleWake(recoverUi))));
 
-            _refreshTimer = new System.Windows.Forms.Timer { Interval = 20000 };
+            _refreshTimer = new System.Windows.Forms.Timer { Interval = RefreshIntervalMilliseconds };
             _refreshTimer.Tick += delegate { RefreshInBackground(); };
             _refreshTimer.Start();
             _widget.ResetTextProvider = BuildResetText;
@@ -155,14 +160,22 @@ namespace CodexQuotaTray
         private void UpdateTrayTooltip()
         {
             var text = BuildResetText();
+            // NotifyIcon rejects tooltips longer than 127 characters.
+            if (text.Length > 127) text = text.Substring(0, 127);
             if (_recoveryIcon.Text != text) _recoveryIcon.Text = text;
         }
 
         private string BuildResetText()
         {
-            var snapshot = _lastResult == null ? null : _lastResult.Snapshot;
-            return FormatTrayReset("5h额度", snapshot == null ? null : snapshot.FiveHourWindow) + "\n" +
+            var snapshot = _lastResult != null && _lastResult.Snapshot != null ? _lastResult.Snapshot : _lastGoodSnapshot;
+            var text = FormatTrayReset("5h额度", snapshot == null ? null : snapshot.FiveHourWindow) + "\n" +
                 FormatTrayReset("周额度", snapshot == null ? null : snapshot.WeeklyWindow);
+            if (_lastError == null) return text;
+            var header = _lastGoodSnapshot == null
+                ? "未能读取额度"
+                : "额度未更新，显示的是 " + _lastGoodSnapshot.CapturedAt.ToLocalTime().ToString("MM-dd HH:mm", CultureInfo.InvariantCulture) + " 的数据";
+            var reason = _lastError.Length > 40 ? _lastError.Substring(0, 40) + "…" : _lastError;
+            return header + "\n" + reason + "\n" + text;
         }
 
         private static string FormatTrayReset(string label, QuotaWindow window)
@@ -206,7 +219,12 @@ namespace CodexQuotaTray
             {
                 QuotaReadResult result;
                 try { result = _reader.ReadLatest(); }
-                catch (Exception exception) { result = new QuotaReadResult { Error = exception.Message }; }
+                catch (Exception exception)
+                {
+                    // Exception messages can contain local paths; log the type and show a fixed message.
+                    RuntimeLog.Exception("quota.read-exception", exception);
+                    result = new QuotaReadResult { Error = "读取额度时出现未知错误" };
+                }
                 try
                 {
                     if (_exiting || _widget.IsDisposed || !_widget.IsHandleCreated) { Interlocked.Exchange(ref _refreshBusy, 0); return; }
@@ -215,11 +233,30 @@ namespace CodexQuotaTray
                         Interlocked.Exchange(ref _refreshBusy, 0);
                         if (_exiting) return;
                         _lastResult = result;
+                        TrackRefreshOutcome(result);
                         ApplyVisualResult(result);
                     }));
                 }
                 catch (InvalidOperationException) { Interlocked.Exchange(ref _refreshBusy, 0); }
             });
+        }
+
+        // The usage endpoint is unofficial: poll it once a minute and back off to ten minutes while it fails.
+        private void TrackRefreshOutcome(QuotaReadResult result)
+        {
+            if (result.TokenRefreshed) RuntimeLog.Event("quota.token-refreshed");
+            if (result.Snapshot != null)
+            {
+                _lastGoodSnapshot = result.Snapshot;
+                if (_lastError != null) RuntimeLog.Event("quota.read-recovered");
+                _lastError = null;
+                _refreshTimer.Interval = RefreshIntervalMilliseconds;
+                return;
+            }
+            var error = string.IsNullOrWhiteSpace(result.Error) ? "读取额度时出现未知错误" : result.Error;
+            if (error != _lastError) RuntimeLog.Event("quota.read-failed", "reason=" + error);
+            _lastError = error;
+            _refreshTimer.Interval = Math.Min(_refreshTimer.Interval * 2, MaximumRefreshIntervalMilliseconds);
         }
 
         private void ApplyVisualResult(QuotaReadResult result)
@@ -228,8 +265,11 @@ namespace CodexQuotaTray
             if (state.CacheChanged) SaveSettings();
             _widget.SetVisual(state.Remaining, state.Known, _hasUnread && _flash);
             _floating.SetVisual(state.Remaining, state.Known, _hasUnread && _flash);
-            _widget.SetResetWindow(state.ResetWindow);
-            _floating.SetResetWindow(state.ResetWindow);
+            // Keep the hover text available while reads fail, so the failure is visible there.
+            var resetWindow = state.ResetWindow ?? (_lastError == null ? null
+                : (_lastGoodSnapshot == null ? null : _lastGoodSnapshot.FiveHourWindow ?? _lastGoodSnapshot.WeeklyWindow) ?? new QuotaWindow());
+            _widget.SetResetWindow(resetWindow);
+            _floating.SetResetWindow(resetWindow);
             var previous = _recoveryImage;
             _recoveryImage = RingIconFactory.Create(state.Remaining, state.Known, ThemePalette.FromSettings(_settings), false, _settings);
             _recoveryIcon.Icon = _recoveryImage;

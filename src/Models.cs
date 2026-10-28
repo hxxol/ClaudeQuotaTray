@@ -204,5 +204,6 @@ namespace CodexQuotaTray
         public List<TokenActivitySample> ActivityTimeline { get; set; }
         public List<QuotaUsageSample> QuotaHistory { get; set; }
         public string Error { get; set; }
+        public bool TokenRefreshed { get; set; }
     }
 }

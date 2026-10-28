@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using Microsoft.Win32;
 
 namespace CodexQuotaTray
@@ -101,7 +102,32 @@ namespace CodexQuotaTray
 
         public static AppSettings Load()
         {
-            return Load(GetPath());
+            var path = GetPath();
+            if (!File.Exists(path)) ImportLegacySettings(path);
+            return Load(path);
+        }
+
+        // Settings used to live in the original CodexQuotaTray folder, shared with that app.
+        // Copy the appearance once, but not its cached quota, which belongs to Codex.
+        private static void ImportLegacySettings(string path)
+        {
+            try
+            {
+                var legacyPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "CodexMeter",
+                    "settings.ini");
+                if (!File.Exists(legacyPath)) return;
+                var lines = File.ReadAllLines(legacyPath)
+                    .Where(line => !line.TrimStart().StartsWith("LastRemainingPercent=", StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.WriteAllLines(path, lines);
+            }
+            catch
+            {
+                // Falling back to defaults is acceptable; the import never blocks startup.
+            }
         }
 
         internal static AppSettings Load(string path)
@@ -225,7 +251,7 @@ namespace CodexQuotaTray
         {
             return Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "CodexMeter",
+                "ClaudeMeter",
                 "settings.ini");
         }
 

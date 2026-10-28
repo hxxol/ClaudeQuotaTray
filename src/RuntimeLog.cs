@@ -16,14 +16,14 @@ namespace CodexQuotaTray
         private static readonly object Gate = new object();
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
         private static string _path;
-        internal static string LogPath => _path ?? @"%LOCALAPPDATA%\CodexMeter\logs\runtime.log";
+        internal static string LogPath => _path ?? @"%LOCALAPPDATA%\ClaudeMeter\logs\runtime.log";
 
         internal static void Start()
         {
             try
             {
                 var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "CodexMeter", "logs");
+                    "ClaudeMeter", "logs");
                 lock (Gate)
                 {
                     Directory.CreateDirectory(directory);
@@ -45,6 +45,12 @@ namespace CodexQuotaTray
         internal static void Event(string stage)
         {
             Write(stage, null);
+        }
+
+        // Details must be app-owned text, such as the fixed quota failure messages.
+        internal static void Event(string stage, string details)
+        {
+            Write(stage, details?.Replace('\r', ' ').Replace('\n', ' '));
         }
 
         internal static void Exception(string stage, Exception exception)
